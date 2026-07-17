@@ -2,19 +2,21 @@
 
 `자연어 캡션 뉴뉴 수정.json`의 실제 실행 흐름을 ComfyUI 없이 사용할 수 있도록 옮긴 독립 실행형 Python CLI입니다.
 
-지정한 폴더의 이미지를 순서대로 찾고, 이미지와 같은 stem의 Danbooru 태그 `.txt`를 읽은 뒤, 로컬 OpenAI 호환 비전 API에 이미지와 태그를 보냅니다. 생성된 자연어 캡션은 별도 출력 폴더에 저장합니다.
+지정한 폴더의 이미지를 순서대로 찾고, 이미지와 같은 stem의 입력 태그 `.txt`를 읽은 뒤, 로컬 OpenAI 호환 비전 API에 이미지와 태그를 보냅니다. JPEG XL(`.jxl`)을 포함한 설정된 이미지 형식을 처리하며, 생성된 자연어 캡션은 별도 출력 폴더에 저장합니다.
 
 ## 처리 흐름
 
 ```text
 image.webp + image.txt
         │
+        ├─ 현재 태그와 파일 크기 표시
         ├─ EXIF 방향 보정 및 RGB 변환
         ├─ 긴 변을 정확히 1024px로 bicubic 리사이즈
         ├─ PNG data URL로 인코딩
         └─ system prompt + 이미지 + 태그를 /v1/chat/completions로 전송
                                       │
-                                      └─ captions/image.webp.txt
+                                      ├─ 캡션이 2,048바이트 초과 시 Gemma에 재요청
+                                      └─ 통과한 캡션을 captions/image.webp.txt로 저장
 ```
 
 원본 워크플로와 비교하면 다음 동작을 유지합니다.
@@ -30,10 +32,12 @@ image.webp + image.txt
 다음 부분은 안전하게 개선했습니다.
 
 - 원본의 단순한 `webp` 문자열 치환 대신 모든 이미지 형식에 대해 올바른 stem `.txt` 경로를 계산합니다.
-- 원본의 append 저장 대신 기존 출력은 기본적으로 건너뜁니다. `--overwrite`를 준 경우에만 교체합니다.
+- 원본의 append 저장 대신 기존 출력은 기본적으로 건너뛰고, `--overwrite`를 지정한 경우에만 교체합니다.
 - 정상적인 비어 있지 않은 응답을 받은 뒤 임시 파일과 `os.replace()`를 사용해 원자적으로 저장합니다.
 - 출력 경로가 원본 이미지와 겹치거나 여러 이미지가 같은 출력 경로를 사용하면 작업 시작 전에 중단합니다.
 - 한 이미지가 실패해도 다음 이미지를 계속 처리하고 마지막에 실패 개수를 반환합니다.
+- 매 항목마다 현재 태그, 완료 개수, 진행률, 경과 시간, 예상 총 시간과 예상 남은 시간을 표시합니다.
+- Gemma가 생성한 캡션의 저장 크기가 2,048바이트를 초과하면 같은 이미지와 태그로 캡션을 다시 생성합니다.
 
 긴 변의 계산과 bicubic 방식은 원본을 따르지만, 이 프로그램은 의존성을 줄이기 위해 Pillow로 리사이즈합니다. 따라서 ComfyUI의 텐서 기반 `common_upscale`과 결과 픽셀이 비트 단위로 완전히 같지는 않을 수 있습니다.
 
@@ -60,7 +64,7 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-런타임 외부 의존성은 Pillow 하나뿐입니다. HTTP 요청에는 Python 표준 라이브러리를 사용합니다.
+이미지 처리는 Pillow를 사용하고, JPEG XL 디코딩은 [`pillow-jxl-plugin`](https://github.com/Isotr0py/pillow-jpegxl-plugin)이 Pillow에 등록합니다. `requirements.txt`를 설치하면 두 패키지가 함께 설치됩니다. HTTP 요청에는 Python 표준 라이브러리를 사용합니다.
 
 ## 입력 폴더 준비
 
@@ -71,10 +75,38 @@ python3 -m pip install -r requirements.txt
 ├── 001.webp
 ├── 001.txt
 ├── 002.png
-└── 002.txt
+├── 002.txt
+├── 003.jxl
+└── 003.txt
 ```
 
 예를 들어 `001.webp`의 입력 태그는 `001.txt`에서 읽습니다. 태그 파일은 기본적으로 UTF-8 또는 UTF-8 BOM 형식으로 읽습니다. `#`으로 시작하는 줄은 무시합니다.
+
+처리할 때는 읽을 수 있는 현재 태그 내용과 원본 태그 파일의 바이트 크기가 터미널에 표시됩니다. 제어 문자가 터미널 동작을 바꾸지 않도록 내용은 JSON 문자열처럼 따옴표와 이스케이프를 사용하며, 매우 긴 내용은 앞 2,048문자까지만 보여줍니다.
+
+## 진행률과 예상 시간
+
+각 이미지 처리가 끝날 때 다음과 같은 상태가 표시됩니다.
+
+```text
+진행률: 12/100 (12.0%) | 경과 00:04:30 | 예상 총 00:37:30 | 예상 남은 시간 00:33:00
+```
+
+예상 시간은 지금까지 처리가 끝난 항목의 평균 시간을 기준으로 계산합니다. 첫 항목이 끝나기 전에는 계산 중으로 표시되며, API 응답 속도나 긴 캡션 재생성 여부에 따라 계속 보정됩니다.
+
+## 2KB 초과 Gemma 캡션 자동 재생성
+
+크기 제한 대상은 입력 태그 파일이 아니라 **Gemma API가 새로 생성한 자연어 캡션**입니다. 캡션과 마지막 줄바꿈을 UTF-8로 인코딩한 실제 저장 크기가 2,048바이트 이하면 저장하고, 2,049바이트부터 해당 결과를 버리고 Gemma에 새 캡션을 요청합니다.
+
+재요청에서도 원래 이미지, system prompt, 입력 태그를 그대로 사용합니다. 고정 seed로 같은 장문이 반복되는 것을 줄이기 위해 다음 시도의 seed를 변경하고, 원래 태그와 분리된 추가 지시문으로 더 짧은 캡션을 요청합니다. 입력 태그 파일은 크기와 관계없이 읽기 전용이며 수정하거나 백업하지 않습니다.
+
+- 기본값은 최초 요청을 포함해 총 2회의 캡션 생성 시도입니다. 각 생성 시도 안의 일시적 HTTP 오류 재시도는 `api.max_retries`에 따라 별도로 수행됩니다.
+- 각 Gemma 응답 내용과 UTF-8 저장 바이트 크기를 터미널에 표시합니다. 긴 응답은 앞 2,048문자까지만 표시합니다.
+- 제한을 통과한 결과가 생긴 경우에만 출력 파일을 원자적으로 저장합니다.
+- 모든 생성 결과가 2,048바이트를 초과하거나 후속 API 요청이 실패하면 해당 이미지를 실패 처리합니다. `--overwrite`를 사용했더라도 기존 캡션은 그대로 보존됩니다.
+- `--dry-run`은 API를 호출하지 않으므로 캡션 크기를 검사하지 않고 생성 예정 작업만 보여줍니다.
+
+같은 폴더에 `image.jpg`와 `image.png`처럼 stem이 같은 이미지가 있으면 기본 `stem` 모드에서 하나의 `image.txt`를 읽기 전용으로 공유합니다. 각각 `image.jpg.txt`, `image.png.txt`를 사용하려면 `files.tag_filename_mode`을 `image_name`으로 바꿉니다.
 
 ## 실행
 
@@ -96,7 +128,8 @@ python3 captionor.py "/path/to/images" \
 ```text
 /path/to/captions/
 ├── 001.webp.txt
-└── 002.png.txt
+├── 002.png.txt
+└── 003.jxl.txt
 ```
 
 기본 출력 폴더는 입력이 폴더일 때 `<입력 폴더>/captions`입니다. 출력 이름에 원본 이미지 확장자를 남기므로 입력 태그 `.txt`와 충돌하지 않습니다.
@@ -158,8 +191,11 @@ python3 captionor.py "/path/to/images"
 | `api.max_retries` | `2` | 일시적 오류 뒤 재시도 횟수 |
 | `image.max_dimension` | `1024` | 리사이즈한 이미지의 긴 변 |
 | `image.resize_mode` | `exact` | `exact`, `shrink`, `none` 중 하나 |
+| `files.image_extensions` | JPG, PNG, WebP, BMP, GIF, TIFF, JXL | 처리할 이미지 확장자 |
 | `files.tag_filename_mode` | `stem` | 입력 태그를 `image.txt`에서 읽음 |
 | `files.output_filename_mode` | `image_name` | 출력을 `image.webp.txt`로 저장 |
+| `caption.max_output_bytes` | `2048` | 저장할 Gemma 캡션의 UTF-8 최대 바이트 수 |
+| `caption.max_attempts` | `2` | 크기 초과 시 최초 요청을 포함한 최대 캡션 생성 횟수 |
 | `request_options` | 워크플로 값 | API 요청 최상위 생성 옵션 |
 
 `request_options.repetition_penalty`는 원본 워크플로의 필드명을 그대로 보존한 서버 확장 옵션입니다. 사용하는 서버가 `repeat_penalty`만 지원한다면 해당 키 이름을 바꿔야 합니다.
@@ -172,10 +208,12 @@ python3 captionor.py "/path/to/images"
 - `model not found`가 나오면 `/v1/models`의 모델 ID를 `api.model` 또는 `--model`에 사용합니다.
 - 알 수 없는 `repetition_penalty` 필드 오류가 나오면 사용하는 서버 문서에 맞춰 `repeat_penalty` 등으로 키를 바꿉니다.
 - context 또는 token 제한 오류가 나오면 `request_options.max_tokens`를 줄입니다.
+- JPEG XL 파일에서 `pillow-jxl-plugin` 설치 안내가 나오면 가상환경을 활성화한 뒤 `python3 -m pip install -r requirements.txt`를 다시 실행합니다.
+- Gemma 캡션이 계속 2,048바이트를 넘으면 `caption.max_attempts`를 늘리거나 system prompt에서 원하는 캡션 길이를 더 명확히 지정합니다.
 
 ## 테스트
 
-테스트는 실제 모델 없이 로컬 모의 API로 요청 본문, 인증 헤더, 재시도, 이미지 인코딩, 저장 및 재개 동작을 검증합니다.
+테스트는 실제 모델 없이 로컬 모의 API로 요청 본문, 인증 헤더, HTTP 재시도, 진행률·예상 시간, Gemma 캡션의 2KB 경계와 UTF-8 바이트 판정, 입력 태그 불변성, JPEG XL을 포함한 이미지 인코딩과 원자 저장을 검증합니다.
 
 ```bash
 python3 -m unittest discover -s tests -v

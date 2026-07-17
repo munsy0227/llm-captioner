@@ -21,12 +21,17 @@
       ".bmp",
       ".gif",
       ".tif",
-      ".tiff"
+      ".tiff",
+      ".jxl"
     ],
     "tag_extension": ".txt",
     "tag_filename_mode": "stem",
     "output_filename_mode": "image_name",
     "text_encoding": "utf-8-sig"
+  },
+  "caption": {
+    "max_output_bytes": 2048,
+    "max_attempts": 2
   },
   "system_prompt_file": "system_prompt.txt",
   "request_options": {

@@ -3,7 +3,7 @@
 
 The program sends a resized image and its tag sidecar to an OpenAI-compatible
 vision endpoint, then stores one caption per image.  It intentionally has no
-ComfyUI dependency; Pillow is the only third-party runtime dependency.
+ComfyUI dependency; Pillow and its JPEG XL plugin handle image decoding.
 """
 
 from __future__ import annotations
@@ -21,10 +21,17 @@ import time
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import urlparse
+
+try:
+    import pillow_jxl  # noqa: F401 - importing registers JPEG XL with Pillow
+except (ImportError, OSError) as exc:
+    _JXL_IMPORT_ERROR: Exception | None = exc
+else:
+    _JXL_IMPORT_ERROR = None
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -40,6 +47,8 @@ RESAMPLING_METHODS = {
     "area": Image.Resampling.BOX,
 }
 RESERVED_REQUEST_KEYS = {"model", "messages", "n", "stream"}
+JXL_DECODER_AVAILABLE = ".jxl" in Image.registered_extensions()
+TEXT_PREVIEW_CHARACTERS = 2_048
 
 
 class CaptionorError(Exception):
@@ -81,10 +90,17 @@ class FileSettings:
 
 
 @dataclass(frozen=True)
+class CaptionSettings:
+    max_output_bytes: int
+    max_attempts: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     api: ApiSettings
     image: ImageSettings
     files: FileSettings
+    caption: CaptionSettings
     system_prompt: str
     request_options: dict[str, Any]
 
@@ -99,6 +115,8 @@ class Job:
 @dataclass
 class RunStats:
     discovered: int = 0
+    selected: int = 0
+    processed: int = 0
     generated: int = 0
     skipped_existing: int = 0
     skipped_missing_tags: int = 0
@@ -173,6 +191,7 @@ def load_config(path: Path) -> AppConfig:
     api_raw = _require_mapping(root.get("api"), "api")
     image_raw = _require_mapping(root.get("image"), "image")
     files_raw = _require_mapping(root.get("files"), "files")
+    caption_raw = _require_mapping(root.get("caption", {}), "caption")
 
     base_url = _normalise_base_url(api_raw.get("base_url"), "api.base_url")
 
@@ -242,6 +261,18 @@ def load_config(path: Path) -> AppConfig:
             files_raw.get("text_encoding", "utf-8-sig"), "files.text_encoding"
         ),
     )
+    caption = CaptionSettings(
+        max_output_bytes=_require_int(
+            caption_raw.get("max_output_bytes", 2_048),
+            "caption.max_output_bytes",
+            minimum=1,
+        ),
+        max_attempts=_require_int(
+            caption_raw.get("max_attempts", 2),
+            "caption.max_attempts",
+            minimum=1,
+        ),
+    )
 
     inline_prompt = root.get("system_prompt")
     prompt_file = root.get("system_prompt_file")
@@ -271,6 +302,7 @@ def load_config(path: Path) -> AppConfig:
         api=api,
         image=image,
         files=files,
+        caption=caption,
         system_prompt=system_prompt,
         request_options=request_options,
     )
@@ -400,9 +432,10 @@ def prepare_jobs(
         )
         for image in images
     ]
-    tag_paths: dict[Path, Path] = {
-        job.tag_path.resolve(): job.image_path for job in jobs
-    }
+    tag_paths: dict[Path, Path] = {}
+    for job in jobs:
+        resolved_tag = job.tag_path.resolve()
+        tag_paths.setdefault(resolved_tag, job.image_path)
     output_paths: dict[Path, Path] = {}
     for job in jobs:
         image = job.image_path
@@ -454,11 +487,26 @@ def prepare_png_data_url(
 ) -> tuple[str, tuple[int, int]]:
     """Apply ComfyUI-like preprocessing and return a base64 PNG data URL."""
 
+    if image_path.suffix.lower() == ".jxl" and not JXL_DECODER_AVAILABLE:
+        reason = f" (불러오기 오류: {_JXL_IMPORT_ERROR})" if _JXL_IMPORT_ERROR else ""
+        raise CaptionorError(
+            f"JPEG XL 이미지를 열 수 없습니다: {image_path}. "
+            "pillow-jxl-plugin을 설치하려면 "
+            "'python3 -m pip install -r requirements.txt'를 실행하세요."
+            f"{reason}"
+        )
+
     try:
         with Image.open(image_path) as source:
             source.load()
             image = ImageOps.exif_transpose(source).convert("RGB")
-    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+    ) as exc:
         raise CaptionorError(f"이미지를 열 수 없습니다: {image_path}: {exc}") from exc
 
     target = _target_size(image.width, image.height, settings)
@@ -476,27 +524,45 @@ def build_payload(
     *,
     tags: str,
     image_data_url: str,
+    attempt: int = 1,
 ) -> dict[str, Any]:
     """Build the non-streaming Chat Completions request used by the workflow."""
 
+    user_content: list[dict[str, Any]] = [
+        {
+            "type": "image_url",
+            "image_url": {"url": image_data_url},
+        },
+        {"type": "text", "text": tags},
+    ]
+    if attempt > 1:
+        user_content.append(
+            {
+                "type": "text",
+                "text": (
+                    "The previous generated caption was too long. Generate a new, "
+                    "shorter caption so the complete UTF-8 output file, including "
+                    "its final newline, is at most "
+                    f"{config.caption.max_output_bytes} bytes."
+                ),
+            }
+        )
     payload: dict[str, Any] = {
         "model": config.api.model,
         "messages": [
             {"role": "system", "content": config.system_prompt},
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": image_data_url},
-                    },
-                    {"type": "text", "text": tags},
-                ],
+                "content": user_content,
             },
         ],
         "n": 1,
     }
-    payload.update(config.request_options)
+    options = dict(config.request_options)
+    seed = options.get("seed")
+    if attempt > 1 and isinstance(seed, int) and not isinstance(seed, bool):
+        options["seed"] = seed + attempt - 1
+    payload.update(options)
     return payload
 
 
@@ -611,12 +677,74 @@ def extract_caption(response: Mapping[str, Any]) -> str:
     return caption
 
 
+def _stored_text_size(text: str, encoding: str) -> int:
+    try:
+        return len(f"{text}\n".encode(encoding))
+    except (LookupError, UnicodeError) as exc:
+        raise CaptionorError(f"텍스트를 {encoding} 형식으로 인코딩할 수 없습니다: {exc}") from exc
+
+
+def _text_preview(text: str, *, max_characters: int = TEXT_PREVIEW_CHARACTERS) -> str:
+    truncated = len(text) > max_characters
+    visible = text[:max_characters] + ("…" if truncated else "")
+    return json.dumps(visible, ensure_ascii=False)
+
+
+def _print_text_preview(label: str, text: str, byte_size: int) -> None:
+    print(
+        f"{label} ({byte_size:,}바이트): {_text_preview(text)}",
+        flush=True,
+    )
+
+
+def generate_caption(
+    config: AppConfig,
+    *,
+    tags: str,
+    image_data_url: str,
+) -> str:
+    """Generate a caption, retrying only when its saved UTF-8 form is too large."""
+
+    last_size = 0
+    for attempt in range(1, config.caption.max_attempts + 1):
+        print(f"Gemma 캡션 요청: {attempt}/{config.caption.max_attempts}", flush=True)
+        response = post_json(
+            chat_completions_url(config.api.base_url),
+            build_payload(
+                config,
+                tags=tags,
+                image_data_url=image_data_url,
+                attempt=attempt,
+            ),
+            api_key=config.api.api_key,
+            timeout_seconds=config.api.timeout_seconds,
+            max_retries=config.api.max_retries,
+            retry_delay_seconds=config.api.retry_delay_seconds,
+        )
+        caption = extract_caption(response)
+        last_size = _stored_text_size(caption, "utf-8")
+        _print_text_preview("Gemma 캡션 응답", caption, last_size)
+        if last_size <= config.caption.max_output_bytes:
+            return caption
+        if attempt < config.caption.max_attempts:
+            print(
+                f"캡션 저장 크기 {last_size:,}바이트가 기준 "
+                f"{config.caption.max_output_bytes:,}바이트를 초과하여 다시 요청합니다.",
+                flush=True,
+            )
+    raise ApiError(
+        f"{config.caption.max_attempts}회의 Gemma 캡션 결과가 모두 "
+        f"{config.caption.max_output_bytes:,}바이트 기준을 초과했습니다 "
+        f"(마지막 결과: {last_size:,}바이트)."
+    )
+
+
 def read_tags(path: Path, encoding: str) -> str:
     try:
         text = path.read_text(encoding=encoding)
     except FileNotFoundError:
         raise
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeError, LookupError) as exc:
         raise CaptionorError(f"태그 파일을 읽을 수 없습니다: {path}: {exc}") from exc
 
     # WAS Load Text File ignores comment-only lines and normalises newlines.
@@ -627,15 +755,13 @@ def read_tags(path: Path, encoding: str) -> str:
     return tags
 
 
-def write_caption_atomic(path: Path, caption: str) -> None:
-    """Atomically replace a caption only after a valid response exists."""
-
+def _write_text_atomic(path: Path, text: str, encoding: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
-            encoding="utf-8",
+            encoding=encoding,
             newline="\n",
             prefix=".captionor-",
             suffix=".tmp",
@@ -643,7 +769,7 @@ def write_caption_atomic(path: Path, caption: str) -> None:
             delete=False,
         ) as handle:
             temp_path = Path(handle.name)
-            handle.write(caption)
+            handle.write(text)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -656,11 +782,37 @@ def write_caption_atomic(path: Path, caption: str) -> None:
                 pass
 
 
+def write_caption_atomic(path: Path, caption: str) -> None:
+    """Atomically replace a caption only after a valid response exists."""
+
+    _write_text_atomic(path, caption, "utf-8")
+
+
 def _is_nonempty_file(path: Path) -> bool:
     try:
         return path.is_file() and path.stat().st_size > 0
     except OSError:
         return False
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3_600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _print_progress(*, processed: int, total: int, elapsed: float) -> None:
+    percentage = processed / total * 100
+    expected_total = elapsed / processed * total
+    remaining = max(0.0, expected_total - elapsed)
+    print(
+        f"진행률: {processed}/{total} ({percentage:.1f}%) | "
+        f"경과 {_format_duration(elapsed)} | "
+        f"예상 총 {_format_duration(expected_total)} | "
+        f"예상 남은 시간 {_format_duration(remaining)}",
+        flush=True,
+    )
 
 
 def run_batch(
@@ -675,6 +827,7 @@ def run_batch(
     dry_run: bool,
     limit: int | None,
     fail_fast: bool,
+    clock: Callable[[], float] | None = None,
 ) -> RunStats:
     """Discover and process images sequentially."""
 
@@ -697,49 +850,94 @@ def run_batch(
         files=config.files,
     )
     jobs = all_jobs[:limit] if limit is not None else all_jobs
+    stats.selected = len(jobs)
+    timer = time.monotonic if clock is None else clock
+    started_at = timer()
 
-    print(f"처리 대상: {len(jobs)}개")
+    print(
+        f"처리 대상: {len(jobs)}개 | 예상 시간: 첫 항목 완료 후 계산",
+        flush=True,
+    )
     for index, job in enumerate(jobs, start=1):
         image_path = job.image_path
         try:
-            prefix = f"[{index}/{len(jobs)}] {image_path}"
-            if not overwrite and _is_nonempty_file(job.output_path):
-                stats.skipped_existing += 1
-                print(f"{prefix} -> 건너뜀 (출력 있음)")
-                continue
+            prefix = f"[현재 항목 {index}/{len(jobs)}] {image_path}"
+            print(f"{prefix} -> 처리 시작", flush=True)
+            should_skip_existing = not overwrite and _is_nonempty_file(job.output_path)
 
             try:
-                tags = read_tags(job.tag_path, config.files.text_encoding)
+                tag_byte_size = job.tag_path.stat().st_size
+                try:
+                    tags = read_tags(job.tag_path, config.files.text_encoding)
+                except CaptionorError as exc:
+                    if should_skip_existing:
+                        stats.skipped_existing += 1
+                        print(
+                            f"{prefix} -> 건너뜀 (출력 있음, 태그 표시 불가: {exc})",
+                            flush=True,
+                        )
+                        continue
+                    raise
             except FileNotFoundError:
+                if should_skip_existing:
+                    stats.skipped_existing += 1
+                    print(
+                        f"{prefix} -> 건너뜀 (출력 있음, 태그 없음: {job.tag_path})",
+                        flush=True,
+                    )
+                    continue
                 if missing_tags == "skip":
                     stats.skipped_missing_tags += 1
-                    print(f"{prefix} -> 건너뜀 (태그 없음: {job.tag_path})")
+                    print(
+                        f"{prefix} -> 건너뜀 (태그 없음: {job.tag_path})",
+                        flush=True,
+                    )
                     continue
                 raise CaptionorError(f"태그 파일을 찾을 수 없습니다: {job.tag_path}")
 
+            _print_text_preview("현재 태그", tags, tag_byte_size)
+
+            if should_skip_existing:
+                stats.skipped_existing += 1
+                print(f"{prefix} -> 건너뜀 (출력 있음)", flush=True)
+                continue
+
             if dry_run:
-                print(f"{prefix} + 태그 {job.tag_path} -> {job.output_path} (미리보기)")
+                print(
+                    f"{prefix} + 태그 {job.tag_path} -> {job.output_path} "
+                    "(캡션 생성 예정, 미리보기)",
+                    flush=True,
+                )
                 continue
 
             image_data_url, size = prepare_png_data_url(job.image_path, config.image)
-            payload = build_payload(config, tags=tags, image_data_url=image_data_url)
-            response = post_json(
-                chat_completions_url(config.api.base_url),
-                payload,
-                api_key=config.api.api_key,
-                timeout_seconds=config.api.timeout_seconds,
-                max_retries=config.api.max_retries,
-                retry_delay_seconds=config.api.retry_delay_seconds,
+            caption = generate_caption(
+                config,
+                tags=tags,
+                image_data_url=image_data_url,
             )
-            caption = extract_caption(response)
             write_caption_atomic(job.output_path, caption)
             stats.generated += 1
-            print(f"{prefix} -> 완료 {size[0]}x{size[1]} -> {job.output_path}")
+            print(
+                f"{prefix} -> 완료 {size[0]}x{size[1]} -> {job.output_path}",
+                flush=True,
+            )
         except (CaptionorError, OSError, ValueError) as exc:
             stats.failed += 1
-            print(f"[{index}/{len(jobs)}] 실패: {image_path}: {exc}", file=sys.stderr)
+            print(
+                f"[{index}/{len(jobs)}] 실패: {image_path}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
             if fail_fast:
                 break
+        finally:
+            stats.processed = index
+            _print_progress(
+                processed=index,
+                total=len(jobs),
+                elapsed=max(0.0, timer() - started_at),
+            )
     return stats
 
 
@@ -761,7 +959,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, help="출력 폴더 (기본값: INPUT/captions)")
     parser.add_argument("--tag-dir", type=Path, help="태그 파일 루트 (기본값: 이미지와 같은 폴더)")
     parser.add_argument("--recursive", action="store_true", help="하위 폴더까지 처리")
-    parser.add_argument("--overwrite", action="store_true", help="기존의 비어 있지 않은 캡션 덮어쓰기")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="기존 캡션 파일도 새로 생성해 덮어쓰기",
+    )
     parser.add_argument(
         "--missing-tags",
         choices=("error", "skip"),
@@ -826,6 +1028,7 @@ def apply_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfig:
         api=api,
         image=image,
         files=config.files,
+        caption=config.caption,
         system_prompt=system_prompt,
         request_options=config.request_options,
     )
@@ -867,7 +1070,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(
         "요약: "
-        f"발견 {stats.discovered}, 생성 {stats.generated}, "
+        f"발견 {stats.discovered}, 선택 {stats.selected}, "
+        f"처리 {stats.processed}/{stats.selected}, 생성 {stats.generated}, "
         f"기존 출력 건너뜀 {stats.skipped_existing}, "
         f"태그 없음 건너뜀 {stats.skipped_missing_tags}, 실패 {stats.failed}"
     )
