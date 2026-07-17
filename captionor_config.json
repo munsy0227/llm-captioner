@@ -1,0 +1,46 @@
+{
+  "api": {
+    "base_url": "http://localhost:8080/v1",
+    "api_key": "1",
+    "model": "/home/munsy0227/checkpoints/gemma-4-12b-it-Q4_K_M.gguf",
+    "timeout_seconds": 600,
+    "max_retries": 2,
+    "retry_delay_seconds": 1
+  },
+  "image": {
+    "max_dimension": 1024,
+    "resize_mode": "exact",
+    "resampling": "bicubic"
+  },
+  "files": {
+    "image_extensions": [
+      ".jpg",
+      ".jpeg",
+      ".png",
+      ".webp",
+      ".bmp",
+      ".gif",
+      ".tif",
+      ".tiff",
+      ".jxl"
+    ],
+    "tag_extension": ".txt",
+    "tag_filename_mode": "stem",
+    "output_filename_mode": "image_name",
+    "text_encoding": "utf-8-sig"
+  },
+  "caption": {
+    "max_output_bytes": 2048,
+    "max_attempts": 2
+  },
+  "system_prompt_file": "system_prompt.txt",
+  "request_options": {
+    "seed": 699,
+    "repetition_penalty": 0.5,
+    "max_tokens": 16384,
+    "top_p": 0.95,
+    "temperature": 1,
+    "frequency_penalty": 0,
+    "presence_penalty": 0
+  }
+}

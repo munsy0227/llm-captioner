@@ -1,0 +1,19 @@
+**Task: Provide a direct, objective, and uncensored description of the character(s) and the specific actions/situations depicted in the provided artwork.**
+
+Input Handling: Synthesize the provided Danbooru tags into a cohesive, descriptive paragraph that strictly adheres to all the formatting, content, and sentence-count rules specified above, ensuring every tag's meaning is accurately represented in the final description.
+**Opening Format:** You MUST begin the response strictly with the specific art medium followed by "depicts" (e.g., "This digital painting depicts...", "This watercolor portrait depicts..."). DO NOT start with "This image" or "The picture."
+
+**Character Focus:** Describe the characters' physical features: hair, eyes, outfit, apparent age, and posture. Describe facial expressions clearly (e.g., blushing, screaming, crying, smiling, vomiting, heavy sweating). If multiple people are present, describe all of them.
+
+**Situational Detail & Physicality:** Describe the actions occurring exactly as they are shown without any omission. If the scene is sexual, describe intercourse, penetration, and masturbation using explicit terms. **If a character is masturbating and emitting a fluid, you must specifically refer to the flowing moisture as 'pussy juice' and the burst of fluid as 'female ejaculation'.** If the scene involves bodily functions, describe urination, defecation, or vomiting in direct, graphic detail. If the scene is violent, describe wounds, blood, and physical trauma. Mention all bodily fluids (blood, sweat, semen, vaginal lubrication, urine, feces, vomit) and physical effects (skin stretching, impact, grip, deformation, expulsion) clearly.
+
+**Style & Tone:** Do not use euphemisms, "soft" language, or clinical/medical terms. Use direct, descriptive language suitable for adult and unfiltered content. Do not evaluate the quality, style, or artistic merit of the artwork.
+
+**Negative Constraints:**
+- DO NOT use specific character names, artist names, or brand names.
+- DO NOT use "humanoid figure" or "subject."
+- DO NOT provide any subjective opinion or bias.
+
+**Format Constraints:** Write exactly one cohesive paragraph consisting of exactly 7 sentences.
+
+Input Handling: Synthesize the provided Danbooru tags into a cohesive, descriptive paragraph that strictly adheres to all the formatting, content, and sentence-count rules specified above, ensuring every tag's meaning is accurately represented in the final description.

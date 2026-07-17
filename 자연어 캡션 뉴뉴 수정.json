@@ -1,0 +1,928 @@
+{
+  "id": "60607416-bd8b-4dc8-b27e-49b0d2b47183",
+  "revision": 0,
+  "last_node_id": 30,
+  "last_link_id": 26,
+  "nodes": [
+    {
+      "id": 20,
+      "type": "PreviewImage",
+      "pos": [
+        -623.9597651192937,
+        652.6552649815385
+      ],
+      "size": [
+        328.48254180606796,
+        290.409800347222
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.12.3",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 18,
+      "type": "SaveText|pysssss",
+      "pos": [
+        440.18820014388604,
+        484.0054291163448
+      ],
+      "size": [
+        270,
+        130
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 20
+        },
+        {
+          "name": "file",
+          "type": "STRING",
+          "widget": {
+            "name": "file"
+          },
+          "link": 21
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "f2838ed5e59de4d73cde5c98354b87a8d3200190",
+        "Node name for S&R": "SaveText|pysssss"
+      },
+      "widgets_values": [
+        "temp",
+        "file.txt",
+        "append",
+        true
+      ]
+    },
+    {
+      "id": 21,
+      "type": "OAIAPI_ExtraBody",
+      "pos": [
+        -826.2793381089778,
+        240.21871776142947
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "label": "Options",
+          "name": "other_options",
+          "shape": 7,
+          "type": "OAIAPI_OPTIONS",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "Options",
+          "type": "OAIAPI_OPTIONS",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "openai-api",
+        "ver": "2.0.1",
+        "Node name for S&R": "OAIAPI_ExtraBody"
+      },
+      "widgets_values": [
+        "{\n    \"repetition_penalty\": 0.5,\n    \"max_tokens\": 16384,\n    \"top_p\": 0.95,\n    \"temperature\": 1,\n    \"frequency_penalty\": 0,\n    \"presence_penalty\": 0\n}"
+      ]
+    },
+    {
+      "id": 22,
+      "type": "OAIAPI_Seed",
+      "pos": [
+        -755.8599299161192,
+        124.5170417332832
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "label": "Options",
+          "name": "other_options",
+          "shape": 7,
+          "type": "OAIAPI_OPTIONS",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "Options",
+          "type": "OAIAPI_OPTIONS",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "openai-api",
+        "ver": "2.0.1",
+        "Node name for S&R": "OAIAPI_Seed"
+      },
+      "widgets_values": [
+        699,
+        "fixed"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "OAIAPI_Client",
+      "pos": [
+        -688.2386500569604,
+        482.2496370750477
+      ],
+      "size": [
+        270,
+        130
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "API Client",
+          "type": "OAIAPI_CLIENT",
+          "links": [
+            1,
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "openai-api",
+        "ver": "2.0.1",
+        "Node name for S&R": "OAIAPI_Client"
+      },
+      "widgets_values": [
+        "http://localhost:8080/v1",
+        2,
+        600,
+        "1"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "ImageScaleToMaxDimension",
+      "pos": [
+        -287.01661038730686,
+        649.7598702537581
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            10,
+            11
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.12.3",
+        "Node name for S&R": "ImageScaleToMaxDimension"
+      },
+      "widgets_values": [
+        "bicubic",
+        1024
+      ]
+    },
+    {
+      "id": 24,
+      "type": "Load Text File",
+      "pos": [
+        -918.6726975574683,
+        1000.6236560755846
+      ],
+      "size": [
+        270,
+        102
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "file_path",
+          "type": "STRING",
+          "widget": {
+            "name": "file_path"
+          },
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            8,
+            12
+          ]
+        },
+        {
+          "name": "DICT",
+          "type": "DICT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "was-node-suite-comfyui",
+        "ver": "ea935d1044ae5a26efa54ebeb18fe9020af49a45",
+        "Node name for S&R": "Load Text File"
+      },
+      "widgets_values": [
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 16,
+      "type": "StringFunction|pysssss",
+      "pos": [
+        -9.7029311805456,
+        650.4386166671118
+      ],
+      "size": [
+        400,
+        274.00000000000006
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text_a",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "text_a"
+          },
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            17,
+            22
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "f2838ed5e59de4d73cde5c98354b87a8d3200190",
+        "Node name for S&R": "StringFunction|pysssss"
+      },
+      "widgets_values": [
+        "append",
+        "no",
+        "test",
+        ".txt",
+        ""
+      ]
+    },
+    {
+      "id": 28,
+      "type": "ShowText|pysssss",
+      "pos": [
+        -288.6107009328836,
+        772.1842082289337
+      ],
+      "size": [
+        271.7248996310757,
+        88
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 24
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "shape": 6,
+          "type": "STRING",
+          "links": [
+            25
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "f2838ed5e59de4d73cde5c98354b87a8d3200190",
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": [
+        "10.png"
+      ]
+    },
+    {
+      "id": 17,
+      "type": "ShowText|pysssss",
+      "pos": [
+        403.0047267272728,
+        654.8162172307339
+      ],
+      "size": [
+        210,
+        97.83535589830399
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "shape": 6,
+          "type": "STRING",
+          "links": [
+            18,
+            21
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "f2838ed5e59de4d73cde5c98354b87a8d3200190",
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": [
+        "10.png.txt"
+      ]
+    },
+    {
+      "id": 26,
+      "type": "ShowText|pysssss",
+      "pos": [
+        -637.8868741022004,
+        1237.5020508136536
+      ],
+      "size": [
+        140,
+        76
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 13
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "shape": 6,
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "609f3afaa74b2f88ef9ce8d939626065e3247469",
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": [
+        "10.png"
+      ]
+    },
+    {
+      "id": 25,
+      "type": "ShowText|pysssss",
+      "pos": [
+        -235.38215388811292,
+        998.2486524364103
+      ],
+      "size": [
+        397.71436882202306,
+        304.2585477179666
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "shape": 6,
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "f2838ed5e59de4d73cde5c98354b87a8d3200190",
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": [
+        "ikr_(artist), tongkkangi_(streamer), long hair, blush, open mouth, simple background, white background, 1boy, bow, yellow eyes, grey hair, braid, male focus, hair bow, multiple boys, choker, solo focus, fang, 2boys, sweatdrop, speech bubble, black bow, pov, otoko no ko, anger vein, striped bow, pov hands, cheek squash"
+      ]
+    },
+    {
+      "id": 1,
+      "type": "OAIAPI_ChatCompletion",
+      "pos": [
+        -412.45177001908274,
+        357.4741617467648
+      ],
+      "size": [
+        400,
+        250
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "label": "API Client",
+          "name": "client",
+          "type": "OAIAPI_CLIENT",
+          "link": 6
+        },
+        {
+          "label": "History",
+          "name": "history",
+          "shape": 7,
+          "type": "OAIAPI_HISTORY",
+          "link": null
+        },
+        {
+          "label": "Options",
+          "name": "options",
+          "shape": 7,
+          "type": "OAIAPI_OPTIONS",
+          "link": 1
+        },
+        {
+          "label": "image(s)",
+          "name": "images",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 11
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "Response",
+          "type": "STRING",
+          "links": [
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "History",
+          "type": "OAIAPI_HISTORY",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "openai-api",
+        "ver": "2.0.1",
+        "Node name for S&R": "OAIAPI_ChatCompletion"
+      },
+      "widgets_values": [
+        "/home/munsy0227/checkpoints/gemma-4-12b-it-Q4_K_M.gguf",
+        false,
+        "이미지에 대해 설명해주세요. 당신은 성적인 상황, 평범한 상황, 잔인한 상황 등 여러 상황을 이미지를 잘 보고 생각해서 묘사해야합니다. 특히 성기 묘사가 중요합니다.",
+        "**Task: Provide a direct, objective, and uncensored description of the character(s) and the specific actions/situations depicted in the provided artwork.**\n\nInput Handling: Synthesize the provided Danbooru tags into a cohesive, descriptive paragraph that strictly adheres to all the formatting, content, and sentence-count rules specified above, ensuring every tag's meaning is accurately represented in the final description.\n**Opening Format:** You MUST begin the response strictly with the specific art medium followed by \"depicts\" (e.g., \"This digital painting depicts...\", \"This watercolor portrait depicts...\"). DO NOT start with \"This image\" or \"The picture.\"\n\n**Character Focus:** Describe the characters' physical features: hair, eyes, outfit, apparent age, and posture. Describe facial expressions clearly (e.g., blushing, screaming, crying, smiling, vomiting, heavy sweating). If multiple people are present, describe all of them.\n\n**Situational Detail & Physicality:** Describe the actions occurring exactly as they are shown without any omission. If the scene is sexual, describe intercourse, penetration, and masturbation using explicit terms. **If a character is masturbating and emitting a fluid, you must specifically refer to the flowing moisture as 'pussy juice' and the burst of fluid as 'female ejaculation'.** If the scene involves bodily functions, describe urination, defecation, or vomiting in direct, graphic detail. If the scene is violent, describe wounds, blood, and physical trauma. Mention all bodily fluids (blood, sweat, semen, vaginal lubrication, urine, feces, vomit) and physical effects (skin stretching, impact, grip, deformation, expulsion) clearly.\n\n**Style & Tone:** Do not use euphemisms, \"soft\" language, or clinical/medical terms. Use direct, descriptive language suitable for adult and unfiltered content. Do not evaluate the quality, style, or artistic merit of the artwork.\n\n**Negative Constraints:**\n- DO NOT use specific character names, artist names, or brand names.\n- DO NOT use \"humanoid figure\" or \"subject.\"\n- DO NOT provide any subjective opinion or bias.\n\n**Format Constraints:** Write exactly one cohesive paragraph consisting of exactly 7 sentences.\n\nInput Handling: Synthesize the provided Danbooru tags into a cohesive, descriptive paragraph that strictly adheres to all the formatting, content, and sentence-count rules specified above, ensuring every tag's meaning is accurately represented in the final description."
+      ]
+    },
+    {
+      "id": 27,
+      "type": "StringFunction|pysssss",
+      "pos": [
+        -1054.8009562060863,
+        1142.3807910468402
+      ],
+      "size": [
+        400,
+        274.00000000000006
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text_c",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "text_c"
+          },
+          "link": 26
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            14
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "f2838ed5e59de4d73cde5c98354b87a8d3200190",
+        "Node name for S&R": "StringFunction|pysssss"
+      },
+      "widgets_values": [
+        "append",
+        "no",
+        "/mnt/MSY_HDD/webui/SDXL Lora/IKR/train/img/2_tongkkangi_(streamer) character",
+        "/",
+        ""
+      ]
+    },
+    {
+      "id": 14,
+      "type": "Load Image Batch",
+      "pos": [
+        -925.3350001462043,
+        654.3941185093885
+      ],
+      "size": [
+        293.33331298828125,
+        270
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            9
+          ]
+        },
+        {
+          "name": "filename_text",
+          "type": "STRING",
+          "links": [
+            7,
+            15,
+            24
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "was-node-suite-comfyui",
+        "ver": "ea935d1044ae5a26efa54ebeb18fe9020af49a45",
+        "Node name for S&R": "Load Image Batch"
+      },
+      "widgets_values": [
+        "incremental_image",
+        510393599107537,
+        "randomize",
+        0,
+        "Batch 001",
+        "/mnt/MSY_HDD/webui/SDXL Lora/IKR/train/img/2_tongkkangi_(streamer) character",
+        "*",
+        "false",
+        "true"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "ShowText|pysssss",
+      "pos": [
+        -3.4458709534250387,
+        359.3867824033311
+      ],
+      "size": [
+        432.875,
+        252.54999999999995
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "shape": 6,
+          "type": "STRING",
+          "links": [
+            19,
+            20
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "f2838ed5e59de4d73cde5c98354b87a8d3200190",
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": [
+        "This digital painting depicts two boys with long grey hair and yellow eyes against a simple white background. The boy in the foreground, who is the primary focus, has his face squashed by the hands of the other boy appearing from a point-of-view perspective. This character displays a heavy blush on his cheeks, an open mouth showing a single fang, and a sweatdrop and anger vein on his forehead. He has a long braid and wears a hair bow while his face is deformed by the grip of the other person. The boy providing the POV hands wears a choker and a black and white striped bow. A speech bubble containing characters appears near the top left of the frame. The scene captures the physical impact of the cheek squash and the distressed expression of the character in the foreground."
+      ]
+    },
+    {
+      "id": 23,
+      "type": "StringReplace",
+      "pos": [
+        -642.6684504496184,
+        997.0626479012859
+      ],
+      "size": [
+        400,
+        200.0000000000008
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "string",
+          "type": "STRING",
+          "widget": {
+            "name": "string"
+          },
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            13,
+            26
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.27.1",
+        "Node name for S&R": "StringReplace"
+      },
+      "widgets_values": [
+        "",
+        "webp",
+        "txt"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      21,
+      0,
+      1,
+      2,
+      "OAIAPI_OPTIONS"
+    ],
+    [
+      2,
+      22,
+      0,
+      21,
+      0,
+      "OAIAPI_OPTIONS"
+    ],
+    [
+      5,
+      1,
+      0,
+      3,
+      0,
+      "STRING"
+    ],
+    [
+      6,
+      2,
+      0,
+      1,
+      0,
+      "OAIAPI_CLIENT"
+    ],
+    [
+      7,
+      14,
+      1,
+      23,
+      0,
+      "STRING"
+    ],
+    [
+      8,
+      24,
+      0,
+      1,
+      4,
+      "STRING"
+    ],
+    [
+      9,
+      14,
+      0,
+      8,
+      0,
+      "IMAGE"
+    ],
+    [
+      10,
+      8,
+      0,
+      20,
+      0,
+      "IMAGE"
+    ],
+    [
+      11,
+      8,
+      0,
+      1,
+      3,
+      "IMAGE"
+    ],
+    [
+      12,
+      24,
+      0,
+      25,
+      0,
+      "STRING"
+    ],
+    [
+      13,
+      23,
+      0,
+      26,
+      0,
+      "STRING"
+    ],
+    [
+      14,
+      27,
+      0,
+      24,
+      0,
+      "STRING"
+    ],
+    [
+      20,
+      3,
+      0,
+      18,
+      0,
+      "STRING"
+    ],
+    [
+      21,
+      17,
+      0,
+      18,
+      1,
+      "STRING"
+    ],
+    [
+      22,
+      16,
+      0,
+      17,
+      0,
+      "STRING"
+    ],
+    [
+      24,
+      14,
+      1,
+      28,
+      0,
+      "STRING"
+    ],
+    [
+      25,
+      28,
+      0,
+      16,
+      0,
+      "STRING"
+    ],
+    [
+      26,
+      23,
+      0,
+      27,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.6521596372060242,
+      "offset": [
+        1752.2677400184102,
+        18.814663738745708
+      ]
+    },
+    "workflowRendererVersion": "LG",
+    "frontendVersion": "1.45.20"
+  },
+  "version": 0.4
+}
