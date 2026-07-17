@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import base64
 import http.client
 import json
@@ -91,6 +92,10 @@ def make_test_config(base_url: str = "http://127.0.0.1:1/v1") -> captionor.AppCo
             max_output_bytes=2_048,
             max_attempts=2,
         ),
+        session=captionor.SessionSettings(
+            time_limit_seconds=None,
+            progress_filename=".captionor-progress.json",
+        ),
         system_prompt="system instructions",
         request_options={
             "seed": 699,
@@ -98,6 +103,52 @@ def make_test_config(base_url: str = "http://127.0.0.1:1/v1") -> captionor.AppCo
             "repetition_penalty": 0.5,
         },
     )
+
+
+class ManualClock:
+    def __init__(self, value: float = 0.0):
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def make_image_batch(root: Path, names=("a.png", "b.png", "c.png")) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        image_path = root / name
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (2, 2), "blue").save(image_path)
+        image_path.with_suffix(".txt").write_text(
+            f"tag-{image_path.stem}",
+            encoding="utf-8",
+        )
+
+
+def run_test_batch(
+    input_root: Path,
+    output_root: Path,
+    *,
+    config: captionor.AppConfig | None = None,
+    **overrides,
+) -> captionor.RunStats:
+    options = {
+        "config": config or make_test_config(),
+        "input_path": input_root,
+        "output_root": output_root,
+        "tag_root": None,
+        "recursive": False,
+        "overwrite": False,
+        "missing_tags": "error",
+        "dry_run": False,
+        "limit": None,
+        "fail_fast": False,
+    }
+    options.update(overrides)
+    return captionor.run_batch(**options)
 
 
 class ConfigAndPathTests(unittest.TestCase):
@@ -113,6 +164,43 @@ class ConfigAndPathTests(unittest.TestCase):
         self.assertIn(".jxl", config.files.image_extensions)
         self.assertEqual(config.caption.max_output_bytes, 2_048)
         self.assertEqual(config.caption.max_attempts, 2)
+        self.assertIsNone(config.session.time_limit_seconds)
+        self.assertEqual(config.session.progress_filename, ".captionor-progress.json")
+
+    def test_parse_duration_supports_seconds_and_compound_units(self):
+        cases = {
+            "90": 90.0,
+            "2.5": 2.5,
+            "45s": 45.0,
+            "2m": 120.0,
+            "1h": 3_600.0,
+            "1h30m15s": 5_415.0,
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(captionor.parse_duration(text), expected)
+
+    def test_parse_duration_and_cli_reject_invalid_values(self):
+        invalid_values = ("", "0", "-1", "nan", "inf", "1d", "1m30")
+        accepted_errors = (ValueError, argparse.ArgumentTypeError, captionor.ConfigError)
+        for text in invalid_values:
+            with self.subTest(text=text), self.assertRaises(accepted_errors):
+                captionor.parse_duration(text)
+
+        parser = captionor.build_argument_parser()
+        args = parser.parse_args(
+            [
+                "images",
+                "--time-limit",
+                "1m30s",
+                "--progress-file",
+                "state.json",
+                "--reset-progress",
+            ]
+        )
+        self.assertEqual(args.time_limit_seconds, 90.0)
+        self.assertEqual(args.progress_path, Path("state.json"))
+        self.assertTrue(args.reset_progress)
 
     def test_caption_limits_must_be_positive(self):
         original = json.loads(captionor.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
@@ -842,6 +930,493 @@ class HttpAndPipelineTests(unittest.TestCase):
             )
             self.assertEqual(resumed.skipped_existing, 1)
             self.assertEqual(len(server.recorded_requests), 1)
+
+
+class SessionProgressTests(unittest.TestCase):
+    def _pause_after_first(
+        self,
+        input_root: Path,
+        output_root: Path,
+        *,
+        progress_path: Path | None = None,
+    ) -> captionor.RunStats:
+        clock = ManualClock()
+
+        def slow_caption(_config, *, tags, image_data_url):
+            self.assertTrue(image_data_url.startswith("data:image/png;base64,"))
+            clock.advance(5.0)
+            return f"first-run-{tags}"
+
+        with patch("captionor.generate_caption", side_effect=slow_caption) as generate:
+            stats = run_test_batch(
+                input_root,
+                output_root,
+                time_limit_seconds=5.0,
+                progress_path=progress_path,
+                clock=clock,
+            )
+
+        self.assertEqual(generate.call_count, 1)
+        self.assertEqual(generate.call_args.kwargs["tags"], "tag-a")
+        return stats
+
+    def test_soft_time_limit_completes_current_item_and_records_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root)
+
+            stats = self._pause_after_first(input_root, output_root)
+
+            first_output = output_root / "a.png.txt"
+            progress_path = output_root / ".captionor-progress.json"
+            self.assertEqual(first_output.read_text(encoding="utf-8"), "first-run-tag-a\n")
+            self.assertFalse((output_root / "b.png.txt").exists())
+            self.assertFalse((output_root / "c.png.txt").exists())
+            self.assertTrue(stats.stopped_by_time)
+            self.assertEqual(stats.generated, 1)
+            self.assertEqual(stats.processed, 1)
+            self.assertEqual(stats.remaining, 2)
+            self.assertEqual(stats.next_image, "b.png")
+            self.assertEqual(stats.progress_path, progress_path)
+            self.assertEqual(stats.exit_code, 0)
+
+            state = json.loads(progress_path.read_text(encoding="utf-8"))
+            required_keys = {
+                "version",
+                "scope",
+                "completed",
+                "failed_images",
+                "total_count",
+                "completed_count",
+                "remaining_count",
+                "last_completed_image",
+                "next_image",
+                "status",
+                "stop_reason",
+                "time_limit_seconds",
+                "updated_at",
+            }
+            self.assertLessEqual(required_keys, state.keys())
+            self.assertEqual(state["version"], 1)
+            self.assertIsInstance(state["scope"], dict)
+            self.assertEqual(set(state["completed"]), {"a.png"})
+            self.assertEqual(state["failed_images"], [])
+            self.assertEqual(state["total_count"], 3)
+            self.assertEqual(state["completed_count"], 1)
+            self.assertEqual(state["remaining_count"], 2)
+            self.assertEqual(state["last_completed_image"], "a.png")
+            self.assertEqual(state["next_image"], "b.png")
+            self.assertEqual(state["status"], "paused")
+            self.assertEqual(state["stop_reason"], "time_limit")
+            self.assertEqual(state["time_limit_seconds"], 5.0)
+            self.assertIsInstance(state["updated_at"], str)
+            self.assertTrue(state["updated_at"])
+
+    def test_existing_checkpoint_auto_resumes_remaining_even_with_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root)
+            self._pause_after_first(input_root, output_root)
+            first_output = output_root / "a.png.txt"
+            original_first = first_output.read_bytes()
+
+            def resumed_caption(_config, *, tags, image_data_url):
+                return f"resumed-{tags}"
+
+            with patch("captionor.generate_caption", side_effect=resumed_caption) as generate:
+                stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    overwrite=True,
+                    time_limit_seconds=None,
+                )
+
+            self.assertEqual(
+                [call.kwargs["tags"] for call in generate.call_args_list],
+                ["tag-b", "tag-c"],
+            )
+            self.assertEqual(first_output.read_bytes(), original_first)
+            self.assertEqual(
+                (output_root / "b.png.txt").read_text(encoding="utf-8"),
+                "resumed-tag-b\n",
+            )
+            self.assertEqual(
+                (output_root / "c.png.txt").read_text(encoding="utf-8"),
+                "resumed-tag-c\n",
+            )
+            self.assertFalse(stats.stopped_by_time)
+            self.assertEqual(stats.generated, 2)
+            self.assertEqual(stats.remaining, 0)
+
+            state = json.loads(
+                (output_root / ".captionor-progress.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(set(state["completed"]), {"a.png", "b.png", "c.png"})
+            self.assertEqual(state["completed_count"], 3)
+            self.assertEqual(state["remaining_count"], 0)
+            self.assertIsNone(state["next_image"])
+
+    def test_reset_progress_starts_from_first_item(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root)
+            self._pause_after_first(input_root, output_root)
+
+            def reset_caption(_config, *, tags, image_data_url):
+                return f"reset-{tags}"
+
+            with patch("captionor.generate_caption", side_effect=reset_caption) as generate:
+                stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    overwrite=True,
+                    reset_progress=True,
+                )
+
+            self.assertEqual(
+                [call.kwargs["tags"] for call in generate.call_args_list],
+                ["tag-a", "tag-b", "tag-c"],
+            )
+            self.assertEqual(stats.generated, 3)
+            self.assertEqual(
+                (output_root / "a.png.txt").read_text(encoding="utf-8"),
+                "reset-tag-a\n",
+            )
+
+    def test_failed_item_stays_pending_and_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root, names=("a.png", "b.png"))
+
+            def initially_failing_caption(_config, *, tags, image_data_url):
+                if tags == "tag-a":
+                    raise captionor.ApiError("temporary failure")
+                return f"first-{tags}"
+
+            with patch(
+                "captionor.generate_caption",
+                side_effect=initially_failing_caption,
+            ) as generate:
+                first_stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    time_limit_seconds=100.0,
+                )
+
+            self.assertEqual(generate.call_count, 2)
+            self.assertEqual(first_stats.failed, 1)
+            self.assertEqual(first_stats.generated, 1)
+            state_path = output_root / ".captionor-progress.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(state["completed"]), {"b.png"})
+            self.assertEqual(state["failed_images"], ["a.png"])
+            self.assertEqual(state["remaining_count"], 1)
+
+            with patch(
+                "captionor.generate_caption",
+                return_value="recovered-a",
+            ) as generate:
+                resumed_stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    overwrite=True,
+                )
+
+            self.assertEqual(generate.call_count, 1)
+            self.assertEqual(generate.call_args.kwargs["tags"], "tag-a")
+            self.assertEqual(resumed_stats.generated, 1)
+            self.assertEqual(
+                (output_root / "a.png.txt").read_text(encoding="utf-8"),
+                "recovered-a\n",
+            )
+            self.assertEqual(
+                (output_root / "b.png.txt").read_text(encoding="utf-8"),
+                "first-tag-b\n",
+            )
+            resumed_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(resumed_state["completed"]), {"a.png", "b.png"})
+            self.assertEqual(resumed_state["failed_images"], [])
+            self.assertEqual(resumed_state["remaining_count"], 0)
+
+    def test_missing_tags_skip_stays_pending_until_tags_appear(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root, names=("a.png", "b.png"))
+            (input_root / "a.txt").unlink()
+
+            with patch("captionor.generate_caption", return_value="caption-b") as generate:
+                first_stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    missing_tags="skip",
+                    time_limit_seconds=100.0,
+                )
+
+            self.assertEqual(generate.call_count, 1)
+            self.assertEqual(generate.call_args.kwargs["tags"], "tag-b")
+            self.assertEqual(first_stats.skipped_missing_tags, 1)
+            state_path = output_root / ".captionor-progress.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(state["completed"]), {"b.png"})
+            self.assertEqual(state["remaining_count"], 1)
+            self.assertEqual(state["next_image"], "a.png")
+
+            (input_root / "a.txt").write_text("tag-a", encoding="utf-8")
+            with patch("captionor.generate_caption", return_value="caption-a") as generate:
+                resumed_stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    missing_tags="skip",
+                    overwrite=True,
+                )
+
+            self.assertEqual(generate.call_count, 1)
+            self.assertEqual(generate.call_args.kwargs["tags"], "tag-a")
+            self.assertEqual(resumed_stats.generated, 1)
+            self.assertEqual(
+                (output_root / "a.png.txt").read_text(encoding="utf-8"),
+                "caption-a\n",
+            )
+            self.assertEqual(
+                (output_root / "b.png.txt").read_text(encoding="utf-8"),
+                "caption-b\n",
+            )
+
+    def test_completed_entry_with_missing_output_is_processed_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root, names=("a.png", "b.png"))
+            self._pause_after_first(input_root, output_root)
+            (output_root / "a.png.txt").unlink()
+
+            def recovered_caption(_config, *, tags, image_data_url):
+                return f"recovered-{tags}"
+
+            with patch("captionor.generate_caption", side_effect=recovered_caption) as generate:
+                stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    overwrite=True,
+                )
+
+            self.assertEqual(
+                [call.kwargs["tags"] for call in generate.call_args_list],
+                ["tag-a", "tag-b"],
+            )
+            self.assertEqual(stats.generated, 2)
+            self.assertEqual(
+                (output_root / "a.png.txt").read_text(encoding="utf-8"),
+                "recovered-tag-a\n",
+            )
+
+    def test_corrupt_checkpoint_is_preserved_and_rejected_before_processing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root, names=("a.png",))
+            output_root.mkdir()
+            progress_path = output_root / ".captionor-progress.json"
+            original_state = b'{"version": 1, broken'
+            progress_path.write_bytes(original_state)
+
+            with patch("captionor.generate_caption") as generate:
+                with self.assertRaises(captionor.ConfigError):
+                    run_test_batch(input_root, output_root)
+
+            generate.assert_not_called()
+            self.assertEqual(progress_path.read_bytes(), original_state)
+            self.assertFalse((output_root / "a.png.txt").exists())
+
+    def test_checkpoint_scope_mismatch_is_rejected_without_modifying_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_input = root / "first-images"
+            first_output = root / "first-captions"
+            second_input = root / "second-images"
+            second_output = root / "second-captions"
+            progress_path = root / "shared-progress.json"
+            make_image_batch(first_input, names=("a.png", "b.png"))
+            make_image_batch(second_input, names=("a.png", "b.png"))
+            self._pause_after_first(
+                first_input,
+                first_output,
+                progress_path=progress_path,
+            )
+            original_state = progress_path.read_bytes()
+
+            with patch("captionor.generate_caption") as generate:
+                with self.assertRaises(captionor.ConfigError):
+                    run_test_batch(
+                        second_input,
+                        second_output,
+                        progress_path=progress_path,
+                    )
+
+            generate.assert_not_called()
+            self.assertEqual(progress_path.read_bytes(), original_state)
+            self.assertFalse(second_output.exists())
+
+    def test_checkpoint_rejects_result_affecting_config_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root, names=("a.png", "b.png"))
+            self._pause_after_first(input_root, output_root)
+            progress_path = output_root / ".captionor-progress.json"
+            original_state = progress_path.read_bytes()
+            first_output = output_root / "a.png.txt"
+            original_caption = first_output.read_bytes()
+
+            config = make_test_config()
+            changed_config = replace(
+                config,
+                api=replace(config.api, model="different-result-model"),
+                system_prompt="different result-affecting instructions",
+            )
+            with patch("captionor.generate_caption") as generate:
+                with self.assertRaises(captionor.ConfigError):
+                    run_test_batch(
+                        input_root,
+                        output_root,
+                        config=changed_config,
+                        overwrite=True,
+                    )
+
+            generate.assert_not_called()
+            self.assertEqual(progress_path.read_bytes(), original_state)
+            self.assertEqual(first_output.read_bytes(), original_caption)
+            self.assertFalse((output_root / "b.png.txt").exists())
+
+    def test_image_extension_progress_file_inside_input_is_excluded_and_resumes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            progress_path = input_root / ".state.png"
+            make_image_batch(input_root, names=("a.png", "b.png"))
+
+            first_stats = self._pause_after_first(
+                input_root,
+                output_root,
+                progress_path=progress_path,
+            )
+            self.assertEqual(first_stats.discovered, 2)
+            self.assertTrue(progress_path.is_file())
+            self.assertEqual(
+                json.loads(progress_path.read_text(encoding="utf-8"))["version"],
+                1,
+            )
+
+            with patch(
+                "captionor.generate_caption",
+                return_value="resumed-b",
+            ) as generate:
+                resumed_stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    overwrite=True,
+                    progress_path=progress_path,
+                )
+
+            self.assertEqual(resumed_stats.discovered, 2)
+            self.assertEqual(generate.call_count, 1)
+            self.assertEqual(generate.call_args.kwargs["tags"], "tag-b")
+            self.assertEqual(
+                (output_root / "b.png.txt").read_text(encoding="utf-8"),
+                "resumed-b\n",
+            )
+            final_state = json.loads(progress_path.read_text(encoding="utf-8"))
+            self.assertEqual(final_state["completed_count"], 2)
+            self.assertEqual(final_state["remaining_count"], 0)
+
+    def test_reset_progress_refuses_to_delete_arbitrary_existing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            make_image_batch(input_root, names=("a.png",))
+            original_bytes = b'{"user": "data that is not a checkpoint"}\n'
+
+            for time_limit_seconds in (None, 5.0):
+                with self.subTest(time_limit_seconds=time_limit_seconds):
+                    output_root = root / (
+                        "captions-unlimited"
+                        if time_limit_seconds is None
+                        else "captions-limited"
+                    )
+                    progress_path = root / (
+                        "user-data-unlimited.json"
+                        if time_limit_seconds is None
+                        else "user-data-limited.json"
+                    )
+                    progress_path.write_bytes(original_bytes)
+
+                    with patch("captionor.generate_caption") as generate:
+                        with self.assertRaises(captionor.ConfigError):
+                            run_test_batch(
+                                input_root,
+                                output_root,
+                                progress_path=progress_path,
+                                reset_progress=True,
+                                time_limit_seconds=time_limit_seconds,
+                            )
+
+                    generate.assert_not_called()
+                    self.assertEqual(progress_path.read_bytes(), original_bytes)
+                    self.assertFalse(output_root.exists())
+
+    def test_dry_run_does_not_create_or_modify_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_root = root / "images"
+            output_root = root / "captions"
+            make_image_batch(input_root, names=("a.png", "b.png"))
+            progress_path = output_root / ".captionor-progress.json"
+
+            with patch("captionor.generate_caption") as generate:
+                stats = run_test_batch(
+                    input_root,
+                    output_root,
+                    dry_run=True,
+                    time_limit_seconds=5.0,
+                    clock=ManualClock(),
+                )
+
+            generate.assert_not_called()
+            self.assertEqual(stats.generated, 0)
+            self.assertFalse(progress_path.exists())
+            self.assertFalse(output_root.exists())
+
+            self._pause_after_first(input_root, output_root)
+            original_state = progress_path.read_bytes()
+            original_caption = (output_root / "a.png.txt").read_bytes()
+            with patch("captionor.generate_caption") as generate:
+                run_test_batch(
+                    input_root,
+                    output_root,
+                    dry_run=True,
+                    overwrite=True,
+                    reset_progress=True,
+                    time_limit_seconds=5.0,
+                    clock=ManualClock(),
+                )
+
+            generate.assert_not_called()
+            self.assertEqual(progress_path.read_bytes(), original_state)
+            self.assertEqual((output_root / "a.png.txt").read_bytes(), original_caption)
 
 
 if __name__ == "__main__":

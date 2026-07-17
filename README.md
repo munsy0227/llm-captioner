@@ -37,6 +37,7 @@ image.webp + image.txt
 - 출력 경로가 원본 이미지와 겹치거나 여러 이미지가 같은 출력 경로를 사용하면 작업 시작 전에 중단합니다.
 - 한 이미지가 실패해도 다음 이미지를 계속 처리하고 마지막에 실패 개수를 반환합니다.
 - 매 항목마다 현재 태그, 완료 개수, 진행률, 경과 시간, 예상 총 시간과 예상 남은 시간을 표시합니다.
+- 실행 시간을 제한하면 완료 위치를 진행 상태 파일에 기록하고 다음 실행에서 남은 항목을 이어서 처리합니다.
 - Gemma가 생성한 캡션의 저장 크기가 2,048바이트를 초과하면 같은 이미지와 태그로 캡션을 다시 생성합니다.
 
 긴 변의 계산과 bicubic 방식은 원본을 따르지만, 이 프로그램은 의존성을 줄이기 위해 Pillow로 리사이즈합니다. 따라서 ComfyUI의 텐서 기반 `common_upscale`과 결과 픽셀이 비트 단위로 완전히 같지는 않을 수 있습니다.
@@ -93,6 +94,54 @@ python3 -m pip install -r requirements.txt
 ```
 
 예상 시간은 지금까지 처리가 끝난 항목의 평균 시간을 기준으로 계산합니다. 첫 항목이 끝나기 전에는 계산 중으로 표시되며, API 응답 속도나 긴 캡션 재생성 여부에 따라 계속 보정됩니다.
+
+## 시간 제한 실행과 이어서 처리
+
+`--time-limit`으로 한 번의 실행에서 캡션을 생성할 시간을 정할 수 있습니다. 숫자만 지정하면 초 단위이며, `s`, `m`, `h` 단위와 복합 형식을 사용할 수 있습니다.
+
+```bash
+# 30분 동안 처리
+python3 captionor.py "/path/to/images" --time-limit 30m
+
+# 다음 실행에서 남은 항목을 다시 30분 동안 처리
+python3 captionor.py "/path/to/images" --time-limit 30m
+
+# 1시간 30분, 2시간, 1800초도 지정 가능
+python3 captionor.py "/path/to/images" --time-limit 1h30m
+python3 captionor.py "/path/to/images" --time-limit 2h
+python3 captionor.py "/path/to/images" --time-limit 1800
+```
+
+기본 진행 상태 파일은 출력 폴더의 `.captionor-progress.json`입니다. 사람이 읽을 수 있는 JSON 형식이며 캡션 파일과 마찬가지로 임시 파일을 거쳐 원자적으로 갱신됩니다. 진행 상태가 있으면 다음 실행에서 `--time-limit`을 생략해도 자동으로 읽고 남은 항목을 이어서 처리합니다.
+
+안전한 재개를 위해 입력·출력·태그 경로, 재귀 처리 여부, 파일명 모드와 함께 API 주소·모델, system prompt, 생성 옵션, 이미지 전처리, 캡션 제한 설정의 지문을 기록합니다. 이 조건이 달라지면 서로 다른 설정의 캡션이 한 작업에 섞이지 않도록 재개를 거부합니다. 설정을 바꿔 새로 생성하려는 경우 `--reset-progress`를 사용하세요.
+
+```bash
+# 이전 진행 상태를 읽고 시간 제한 없이 나머지를 끝까지 처리
+python3 captionor.py "/path/to/images"
+
+# 설정 파일의 session.time_limit_seconds를 이번 실행에서만 해제
+python3 captionor.py "/path/to/images" --no-time-limit
+
+# 진행 상태 파일을 다른 위치에 저장하고 이후에도 같은 파일로 이어서 처리
+python3 captionor.py "/path/to/images" \
+  --time-limit 30m \
+  --progress-file "/path/to/state/my-caption-progress.json"
+```
+
+시간 제한은 새 항목을 시작하기 직전에 확인합니다. 제한 시간에 도달했더라도 이미 시작한 이미지의 API 요청과 안전한 파일 저장은 끝낸 뒤 중단하므로 실제 실행 시간은 지정한 값보다 길어질 수 있습니다. 진행 중인 항목이 정상적으로 저장된 뒤에만 완료 위치가 갱신됩니다.
+
+API 오류나 태그 누락으로 캡션을 만들지 못한 항목은 완료로 기록하지 않으며 다음 실행에서도 처리 대상으로 남습니다. 반대로 캡션을 생성했거나 비어 있지 않은 기존 출력이 확인된 항목은 완료로 기록합니다. 진행 상태에는 완료로 남아 있어도 해당 출력 파일이 사라졌거나 비어 있으면 다시 처리합니다.
+
+`--overwrite`를 사용한 실행도 진행 상태에 완료로 기록된 항목은 다시 덮어쓰지 않고 그 다음 항목부터 이어집니다. 모든 항목을 처음부터 다시 생성하려면 `--reset-progress`를 함께 사용합니다. `--reset-progress`는 진행 상태만 초기화하며 기존 캡션 파일 자체를 삭제하지 않습니다. 지정한 기존 파일이 Captionor 진행 상태로 확인되지 않거나 JSON이 손상되어 있으면 임의 파일을 지우지 않도록 초기화를 거부하므로, 파일을 직접 확인해 옮기거나 다른 `--progress-file`을 지정하세요.
+
+```bash
+python3 captionor.py "/path/to/images" --overwrite --reset-progress
+```
+
+`--dry-run`은 기존 진행 상태를 바탕으로 작업 예정 목록을 보여줄 수 있지만 진행 상태 파일을 만들거나 갱신하거나 삭제하지 않습니다.
+
+같은 진행 상태 파일을 사용하는 Captionor 프로세스를 동시에 실행하면 중복 생성이나 진행 기록 유실이 생길 수 있으므로 한 번에 하나만 실행하세요. `--limit`을 함께 쓸 때 맨 앞의 실패·태그 누락 항목이 계속 남아 있으면 다음 실행에서도 먼저 선택되므로, 태그나 오류를 해결하거나 제한값을 늘려야 뒤 항목도 처리됩니다.
 
 ## 2KB 초과 Gemma 캡션 자동 재생성
 
@@ -152,6 +201,9 @@ python3 captionor.py "/path/to/images" --missing-tags skip
 # 앞의 10개만 처리
 python3 captionor.py "/path/to/images" --limit 10
 
+# 30분 동안 처리하고 다음 실행에서 자동으로 이어서 처리
+python3 captionor.py "/path/to/images" --time-limit 30m
+
 # 작은 이미지를 1024px까지 확대하지 않기
 python3 captionor.py "/path/to/images" --no-upscale
 
@@ -196,6 +248,8 @@ python3 captionor.py "/path/to/images"
 | `files.output_filename_mode` | `image_name` | 출력을 `image.webp.txt`로 저장 |
 | `caption.max_output_bytes` | `2048` | 저장할 Gemma 캡션의 UTF-8 최대 바이트 수 |
 | `caption.max_attempts` | `2` | 크기 초과 시 최초 요청을 포함한 최대 캡션 생성 횟수 |
+| `session.time_limit_seconds` | `0` | 한 실행의 시간 제한(초). `0`이면 제한 없음 |
+| `session.progress_filename` | `.captionor-progress.json` | 출력 폴더에 둘 기본 진행 상태 파일명 |
 | `request_options` | 워크플로 값 | API 요청 최상위 생성 옵션 |
 
 `request_options.repetition_penalty`는 원본 워크플로의 필드명을 그대로 보존한 서버 확장 옵션입니다. 사용하는 서버가 `repeat_penalty`만 지원한다면 해당 키 이름을 바꿔야 합니다.
@@ -210,10 +264,12 @@ python3 captionor.py "/path/to/images"
 - context 또는 token 제한 오류가 나오면 `request_options.max_tokens`를 줄입니다.
 - JPEG XL 파일에서 `pillow-jxl-plugin` 설치 안내가 나오면 가상환경을 활성화한 뒤 `python3 -m pip install -r requirements.txt`를 다시 실행합니다.
 - Gemma 캡션이 계속 2,048바이트를 넘으면 `caption.max_attempts`를 늘리거나 system prompt에서 원하는 캡션 길이를 더 명확히 지정합니다.
+- 다른 `--progress-file`을 사용했던 작업을 이어가려면 이전과 같은 경로를 다시 지정합니다. 기본 경로로 돌아가면 해당 출력 폴더의 `.captionor-progress.json`을 사용합니다.
+- 진행 상태를 무시하고 처음부터 새 작업으로 시작하려면 `--reset-progress`를 지정합니다. 기존 캡션까지 다시 생성하려면 `--overwrite`도 함께 지정해야 합니다.
 
 ## 테스트
 
-테스트는 실제 모델 없이 로컬 모의 API로 요청 본문, 인증 헤더, HTTP 재시도, 진행률·예상 시간, Gemma 캡션의 2KB 경계와 UTF-8 바이트 판정, 입력 태그 불변성, JPEG XL을 포함한 이미지 인코딩과 원자 저장을 검증합니다.
+테스트는 실제 모델 없이 로컬 모의 API로 요청 본문, 인증 헤더, HTTP 재시도, 진행률·예상 시간, 시간 제한과 진행 상태 재개, Gemma 캡션의 2KB 경계와 UTF-8 바이트 판정, 입력 태그 불변성, JPEG XL을 포함한 이미지 인코딩과 원자 저장을 검증합니다.
 
 ```bash
 python3 -m unittest discover -s tests -v

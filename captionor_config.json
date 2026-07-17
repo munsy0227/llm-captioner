@@ -33,6 +33,10 @@
     "max_output_bytes": 2048,
     "max_attempts": 2
   },
+  "session": {
+    "time_limit_seconds": 0,
+    "progress_filename": ".captionor-progress.json"
+  },
   "system_prompt_file": "system_prompt.txt",
   "request_options": {
     "seed": 699,
